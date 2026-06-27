@@ -3,7 +3,7 @@ import json
 import numpy as np
 from typing import List
 from redteam.ablation import AblationStudy, cosine_similarity
-from redteam.contracts import AttackSpec
+from contracts import AttackSpec
 
 class SpecNoveltyChecker:
     def __init__(self):
