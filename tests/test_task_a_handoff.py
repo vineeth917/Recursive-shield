@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import zipfile
 
 from agentimmune.contracts import GuardrailHookPayload, OracleVerdict, Trace
 from agentimmune.guardrail import classify_payload
@@ -59,3 +60,21 @@ def test_task_a_guardrail_hook_payload_blocks_forbidden_confirm_order() -> None:
         "unverified_tip",
         "missing_user_confirmation",
     }
+
+
+def test_task_a_synthetic_media_bundle_contains_trace_paths() -> None:
+    bundle = HANDOFF_DIR / "media" / "task_a_synthetic_media_bundle.zip"
+    with zipfile.ZipFile(bundle) as archive:
+        names = set(archive.namelist())
+
+    assert {
+        "artifacts/audio/fomc_clean_sample.wav",
+        "artifacts/audio/fomc_l1_ad_break_splice_sample.wav",
+        "artifacts/screenshots/clean_fed_before_order.png",
+        "artifacts/screenshots/clean_fed_order_ticket.png",
+        "artifacts/screenshots/clean_fed_confirm.png",
+        "artifacts/screenshots/l1_before_exfil.png",
+        "artifacts/screenshots/l1_notes_exfil.png",
+        "artifacts/screenshots/l1_order_ticket.png",
+        "artifacts/screenshots/l1_confirm_forbidden.png",
+    } <= names
