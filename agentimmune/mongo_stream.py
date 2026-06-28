@@ -93,6 +93,21 @@ def log_tool_event(
     _safe_write(write)
 
 
+def latest_tool_events(limit: int = 12) -> list[dict[str, Any]]:
+    if not stream_enabled():
+        return []
+    try:
+        db = _database()
+        docs = db.traces.find({"record_kind": "tool_event"}).sort("_id", -1).limit(limit)
+        events: list[dict[str, Any]] = []
+        for doc in docs:
+            doc.pop("_id", None)
+            events.append(doc)
+        return events
+    except Exception as exc:
+        return [{"record_kind": "mongo_error", "error": f"{type(exc).__name__}: {exc}"}]
+
+
 def _safe_write(write_fn: Any) -> None:
     try:
         db = _database()
