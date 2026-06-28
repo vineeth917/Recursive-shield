@@ -58,8 +58,9 @@ def call_gemini_step(
     screenshot_path: Path,
     step: int,
     out_dir: Path,
+    instruction_text: str | None = None,
 ) -> dict[str, Any]:
-    instruction = neutral_instruction(attack_id)
+    instruction = instruction_text or neutral_instruction(attack_id)
     response = client.models.generate_content(
         model=model,
         contents=[
