@@ -27,6 +27,12 @@ voyage = [
 google = [
   "google-genai>=2.3.0",
 ]
+lora = [
+  "accelerate>=1.0,<2",
+  "peft>=0.14,<1",
+  "torch>=2.5,<3",
+  "transformers>=4.50,<5",
+]
 serving = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.30,<1",
