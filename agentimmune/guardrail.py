@@ -87,7 +87,7 @@ class LoraGuardrail:
         )
         self.base_model = os.environ.get(
             "AGENTIMMUNE_GUARDRAIL_BASE_MODEL",
-            os.environ.get("GUARDRAIL_BASE_MODEL", "unsloth/gemma-4-4b-it-bnb-4bit"),
+            os.environ.get("GUARDRAIL_BASE_MODEL", "unsloth/gemma-3-4b-it-bnb-4bit"),
         )
         self.adapter_repo = os.environ.get(
             "AGENTIMMUNE_GUARDRAIL_ADAPTER_REPO",
