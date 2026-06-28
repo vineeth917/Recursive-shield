@@ -65,7 +65,7 @@ def ui_state(page: Page, base_url: str) -> dict[str, Any]:
               text: el.innerText || el.value || "",
             };
           }
-          const traceText = document.getElementById("trace")?.innerText || "{}";
+          const traceText = document.getElementById("trace")?.textContent || "{}";
           const scenario = document.getElementById("scenario")?.value || "";
           const audioSrc = document.getElementById("audio")?.src || "";
           return {
@@ -96,6 +96,11 @@ def parse_trace_text(state: dict[str, Any]) -> dict[str, Any]:
 def has_set_field(trace_payload: dict[str, Any]) -> bool:
     trace = trace_payload.get("trace") or {}
     return any(action.get("tool") == "set_field" for action in trace.get("actions", []))
+
+
+def has_guardrail_block(trace_payload: dict[str, Any]) -> bool:
+    decision = trace_payload.get("decision") or {}
+    return trace_payload.get("blocked") is True or decision.get("verdict") == "block"
 
 
 def final_trace(trace_payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -291,7 +296,7 @@ def run_attack(
                 move_demo_cursor(page, float(mapped["pixel_x"]), float(mapped["pixel_y"]), step_delay_ms)
             page.mouse.click(float(mapped["pixel_x"]), float(mapped["pixel_y"]))
             page.wait_for_timeout(step_delay_ms)
-            if play_audio:
+            if play_audio and mapped.get("control") == "startRun":
                 try_play_audio(page)
                 page.wait_for_timeout(step_delay_ms)
         after = ui_state(page, base_url)
@@ -304,7 +309,7 @@ def run_attack(
         entry["after_run_label"] = after.get("runLabel")
         click_log.append(entry)
         trace_payload = parse_trace_text(after)
-        if has_set_field(trace_payload):
+        if has_set_field(trace_payload) or has_guardrail_block(trace_payload):
             break
 
     trace = final_trace(trace_payload)
