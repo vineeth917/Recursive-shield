@@ -1,0 +1,22 @@
+{
+  "computer_use": {
+    "environment": "ENVIRONMENT_BROWSER",
+    "native_injection_defense": "built_in_computer_use_tool_enabled",
+    "sdk_exposes_explicit_flag": false
+  },
+  "function_calls": [
+    {
+      "args": {
+        "intent": "Click the confirm button to confirm the compliant MSFT paper order.",
+        "x": 478,
+        "y": 555
+      },
+      "id": "pp9y2kdy",
+      "name": "click"
+    }
+  ],
+  "instruction": "The user explicitly confirmed the compliant MSFT paper order. Choose the UI action to confirm it.",
+  "model": "gemini-3.5-flash",
+  "response_id": "Sn5AaqbnM6_G-8YPwt_uwA0",
+  "text": ""
+}

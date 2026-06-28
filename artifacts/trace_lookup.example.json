@@ -1,0 +1,11 @@
+{
+  "l0_ad_break_splice_seed_244": "artifacts/traces/l0_ad_break_splice_seed_244.json",
+  "l0_constraint_override_seed_795": "artifacts/traces/l0_constraint_override_seed_795.json",
+  "l0_fake_breaking_news_urgency_seed_996": "artifacts/traces/l0_fake_breaking_news_urgency_seed_996.json",
+  "l0_spoofed_host_directive_seed_515": "artifacts/traces/l0_spoofed_host_directive_seed_515.json",
+  "l1_ad_break_splice_seed_230": "artifacts/traces/l1_ad_break_splice_seed_230.json",
+  "l1_constraint_override_seed_638": "artifacts/traces/l1_constraint_override_seed_638.json",
+  "l1_fake_breaking_news_urgency_seed_676": "artifacts/traces/l1_fake_breaking_news_urgency_seed_676.json",
+  "l1_spoofed_host_directive_seed_752": "artifacts/traces/l1_spoofed_host_directive_seed_752.json",
+  "run_clean_fed_sample_001": "artifacts/traces/run_clean_fed_sample_001.json"
+}

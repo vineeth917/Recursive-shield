@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Any
 
-from agentimmune.contracts import AttackSpec, NativeDefenseOutcome, OracleVerdict, Trace
+from agentimmune.contracts import AttackSpec, EvalRun, ModelVersion, NativeDefenseOutcome, OracleVerdict, Trace
 from agentimmune.oracle import attach_oracle_label
 from pydantic import ValidationError
 
 from .config import load_settings
-from .db import ensure_collections, ensure_vector_index, get_database, upsert_attacks
+from .db import ensure_collections, ensure_vector_index, get_database, upsert_attacks, write_embedding
+from .embeddings import VoyageEmbedder
 from .split import SplitConfig, assert_no_leakage, build_split, split_summary, write_split_json
+from .vectors import embedding_text
 
 
 def main() -> int:
@@ -52,6 +55,10 @@ def main() -> int:
     build_traces.add_argument("--trace-glob", action="append", required=True)
     build_traces.add_argument("--out", default="artifacts/training/sft_traces.jsonl")
 
+    resolve = sub.add_parser("resolve-check", help="Fail if split IDs do not resolve to labeled Trace JSONs.")
+    resolve.add_argument("split_json")
+    resolve.add_argument("--trace-lookup", required=True, help="JSON mapping split attack_id/run_id values to Trace JSON paths.")
+
     init_db_cmd = sub.add_parser("init-db", help="Create Task C MongoDB collections and indexes.")
 
     vector_index = sub.add_parser("init-vector-index", help="Create the Atlas Vector Search index.")
@@ -65,9 +72,19 @@ def main() -> int:
     leakage.add_argument("path")
     leakage.add_argument("--split", default="split.json")
 
-    resolve = sub.add_parser("resolve-check", help="Fail if split IDs do not resolve to labeled Trace JSONs.")
-    resolve.add_argument("split_json")
-    resolve.add_argument("--trace-lookup", required=True)
+    audio = sub.add_parser("audio-audit", help="Audit attack audio, payload audio, clean carriers, and ASR provenance.")
+    audio.add_argument("path")
+    audio.add_argument("--trace-lookup", default=None)
+
+    embed = sub.add_parser("embed-attacks", help="Embed AttackSpecs with Voyage and write Mongo attack_embeddings.")
+    embed.add_argument("path")
+
+    mongo = sub.add_parser("mongo-proof", help="Write/read proof documents in all Task C Mongo collections.")
+
+    report = sub.add_parser("handoff-report", help="Print per-attack data handoff table.")
+    report.add_argument("split_json")
+    report.add_argument("--trace-lookup", required=True)
+    report.add_argument("--specs", default="artifacts/specs")
 
     args = parser.parse_args()
     if args.command == "smoke-voyage":
@@ -93,6 +110,8 @@ def main() -> int:
         )
     if args.command == "build-sft-traces":
         return build_sft_traces(args.trace_glob, Path(args.out))
+    if args.command == "resolve-check":
+        return resolve_check(Path(args.split_json), Path(args.trace_lookup))
     if args.command == "init-db":
         return init_db()
     if args.command == "init-vector-index":
@@ -101,8 +120,14 @@ def main() -> int:
         return split_attacks(Path(args.path), Path(args.out), Path(args.benign) if args.benign else None)
     if args.command == "leakage-check":
         return leakage_check(Path(args.path), Path(args.split))
-    if args.command == "resolve-check":
-        return resolve_check(Path(args.split_json), Path(args.trace_lookup))
+    if args.command == "audio-audit":
+        return audio_audit(Path(args.path), Path(args.trace_lookup) if args.trace_lookup else None)
+    if args.command == "embed-attacks":
+        return embed_attacks(Path(args.path))
+    if args.command == "mongo-proof":
+        return mongo_proof()
+    if args.command == "handoff-report":
+        return handoff_report(Path(args.split_json), Path(args.trace_lookup), Path(args.specs))
     raise AssertionError(args.command)
 
 
@@ -234,7 +259,7 @@ def build_sft(
     split = json.loads(split_json.read_text())
     traces = _load_traces(trace_globs)
     if trace_lookup:
-        traces.extend(_load_trace_lookup(trace_lookup))
+        traces.extend(_load_trace_lookup_traces(trace_lookup))
     trace_index = _index_traces(traces)
     train_items, missing = _resolve_split_traces(split.get("train", []), trace_index)
     benign_items, benign_missing = _resolve_split_traces(split.get("benign", []), trace_index)
@@ -324,6 +349,181 @@ def leakage_check(specs_path: Path, split_path: Path) -> int:
     split = json.loads(split_path.read_text(encoding="utf-8"))
     assert_no_leakage(specs, split, duplicate_threshold=load_settings().duplicate_threshold)
     print("leakage_firewall=pass")
+    return 0
+
+
+def audio_audit(specs_path: Path, trace_lookup_path: Path | None) -> int:
+    specs, errors = _load_attack_specs(specs_path)
+    if errors:
+        for error in errors:
+            print(f"rejected {error}")
+        return 1
+    lookup = _load_trace_lookup_map(trace_lookup_path) if trace_lookup_path else {}
+    traces = _load_trace_lookup_trace_map(lookup) if lookup else {}
+    issues: list[str] = []
+    attack_hashes: dict[str, list[str]] = {}
+    payload_hashes: dict[str, list[str]] = {}
+
+    for spec in specs:
+        attack_path = Path(spec.audio_path)
+        if not attack_path.exists():
+            issues.append(f"{spec.attack_id}: attack WAV missing: {attack_path}")
+        else:
+            attack_hashes.setdefault(_sha256_file(attack_path), []).append(spec.attack_id)
+
+        payload_path = Path("artifacts") / "payloads" / f"{spec.attack_id}_payload.wav"
+        if not payload_path.exists():
+            issues.append(f"{spec.attack_id}: payload WAV missing: {payload_path}")
+        else:
+            payload_hashes.setdefault(_sha256_file(payload_path), []).append(spec.attack_id)
+
+        if not spec.clean_audio_path:
+            issues.append(f"{spec.attack_id}: clean_audio_path missing")
+        elif not Path(spec.clean_audio_path).exists():
+            issues.append(f"{spec.attack_id}: clean_audio_path does not exist: {spec.clean_audio_path}")
+
+        trace = traces.get(spec.attack_id)
+        if trace is not None:
+            if not trace.transcript.strip():
+                issues.append(f"{spec.attack_id}: ASR transcript is empty")
+            if trace.transcript.strip() == spec.payload_text.strip() and not _has_asr_provenance(trace):
+                issues.append(f"{spec.attack_id}: transcript equals payload_text but no ASR provenance exists")
+
+    _append_duplicate_hash_issues("attack WAV", attack_hashes, issues)
+    _append_duplicate_hash_issues("payload WAV", payload_hashes, issues)
+
+    if issues:
+        print("AUDIO AUDIT: FAIL")
+        for issue in issues:
+            print(f"- {issue}")
+        return 1
+
+    print("AUDIO AUDIT: PASS")
+    print(f"specs_checked={len(specs)}")
+    print(f"attack_wavs_unique={len(attack_hashes)}")
+    print(f"payload_wavs_unique={len(payload_hashes)}")
+    return 0
+
+
+def embed_attacks(specs_path: Path) -> int:
+    settings = load_settings()
+    specs, errors = _load_attack_specs(specs_path)
+    if errors:
+        for error in errors:
+            print(f"rejected {error}")
+        return 1
+    if settings.voyage_model != "voyage-4-large" or settings.voyage_dimension != 1024:
+        print(
+            f"FAIL: expected VOYAGE_MODEL=voyage-4-large and VOYAGE_DIMENSION=1024, "
+            f"got {settings.voyage_model} dimension={settings.voyage_dimension}",
+            file=sys.stderr,
+        )
+        return 1
+
+    db = get_database(settings)
+    ensure_collections(db)
+    upsert_attacks(db, specs)
+    embedder = VoyageEmbedder(settings)
+    texts = [embedding_text(spec.payload_text, spec.source_transcript_id, str(spec.family), spec.delivery) for spec in specs]
+    vectors = embedder.embed(texts)
+    for spec, vector in zip(specs, vectors):
+        write_embedding(
+            db,
+            attack_id=spec.attack_id,
+            family=str(spec.family),
+            seed=spec.seed,
+            model=settings.voyage_model,
+            dimension=settings.voyage_dimension,
+            vector=vector,
+        )
+    print(f"embedded_attacks={len(specs)}")
+    print(f"voyage_model={settings.voyage_model}")
+    print(f"dimension={settings.voyage_dimension}")
+    print(f"tau={settings.duplicate_threshold}")
+    print("mongo_collection=agentimmune.attack_embeddings")
+    print("filters=family,seed")
+    return 0
+
+
+def mongo_proof() -> int:
+    settings = load_settings()
+    db = get_database(settings)
+    ensure_collections(db)
+    proof_id = "task_c_mongo_proof"
+    model = ModelVersion(model_version_id=proof_id, train_set_hash="proof")
+    eval_run = EvalRun(eval_run_id=proof_id, model_version_id=proof_id, split_id="proof", metrics={}, promotion_reason="proof")
+    attack = AttackSpec(
+        attack_id=proof_id,
+        family="ad_break_splice",
+        payload_text="proof",
+        delivery="proof",
+        target_violation="proof",
+        audio_path="artifacts/attacks/l0_ad_break_splice_seed_244.wav",
+        seed="proof",
+        source_transcript_id="proof",
+    )
+    trace = Trace(
+        run_id=proof_id,
+        attack_id=proof_id,
+        audio_path=attack.audio_path,
+        transcript="proof",
+        policy={"raw_text": "Max 5 percent per position.", "max_position_pct": 5},
+        native_defense_outcome=NativeDefenseOutcome.CAUGHT,
+        oracle={"label": OracleVerdict.SAFE, "reason": "proof"},
+        metadata={"gemini_evidence": {"proof": True}},
+    )
+    writes = {
+        "traces": ({"run_id": proof_id}, trace.model_dump(mode="json")),
+        "attacks": ({"attack_id": proof_id}, attack.model_dump(mode="json")),
+        "attack_embeddings": (
+            {"attack_id": proof_id},
+            {
+                "attack_id": proof_id,
+                "family": str(attack.family),
+                "seed": attack.seed,
+                "model": settings.voyage_model,
+                "dimension": settings.voyage_dimension,
+                "embedding": [0.0] * settings.voyage_dimension,
+            },
+        ),
+        "model_versions": ({"model_version_id": proof_id}, model.model_dump(mode="json")),
+        "eval_runs": ({"eval_run_id": proof_id}, eval_run.model_dump(mode="json")),
+    }
+    for collection_name, (selector, document) in writes.items():
+        collection = db[collection_name]
+        collection.update_one(selector, {"$set": document}, upsert=True)
+        if collection.find_one(selector) is None:
+            print(f"MONGO PROOF: FAIL {collection_name}")
+            return 1
+        print(f"{collection_name}=write_read_ok")
+    print(f"mongo_db={settings.mongodb_db}")
+    return 0
+
+
+def handoff_report(split_json: Path, trace_lookup_path: Path, specs_path: Path) -> int:
+    split = json.loads(split_json.read_text(encoding="utf-8"))
+    specs, errors = _load_attack_specs(specs_path)
+    if errors:
+        for error in errors:
+            print(f"rejected {error}")
+        return 1
+    specs_by_id = {spec.attack_id: spec for spec in specs}
+    lookup = _load_trace_lookup_map(trace_lookup_path)
+    traces = _load_trace_lookup_trace_map(lookup)
+    embedded_ids = _load_mongo_embedding_ids()
+    print("attack_id | trace_path | audio_hash_unique | asr_ok | native_defense_outcome | oracle_label | embedded | split")
+    for split_name in ["train", "dev", "held_out", "novel_held_out", "benign"]:
+        for item in split.get(split_name, []):
+            split_id = _split_item_id(item) or str(item)
+            trace = traces.get(split_id)
+            trace_path = lookup.get(split_id, "missing")
+            spec = specs_by_id.get(split_id)
+            audio_hash_unique = "n/a" if spec is None else str(_audio_hash_is_unique(spec, specs))
+            asr_ok = str(trace is not None and bool(trace.transcript.strip()) and _has_asr_provenance(trace))
+            outcome = str(trace.native_defense_outcome) if trace else "missing"
+            oracle = str(trace.oracle.label) if trace and trace.oracle else "missing"
+            embedded = str(bool((trace and trace.metadata.get("embedded")) or split_id in embedded_ids))
+            print(f"{split_id} | {trace_path} | {audio_hash_unique} | {asr_ok} | {outcome} | {oracle} | {embedded} | {split_name}")
     return 0
 
 
@@ -458,9 +658,10 @@ def _load_benign_ids(path: Path | None) -> list[str]:
     return [item for item in ids if item and item != "None"]
 
 
-def _trace_from_item(item: Any) -> Trace:
+def _trace_from_item(item: Any, trace_lookup: dict[str, str] | None = None) -> Trace:
     if isinstance(item, str):
-        return Trace.model_validate_json(Path(item).read_text())
+        path = Path(trace_lookup[item]) if trace_lookup and item in trace_lookup else Path(item)
+        return Trace.model_validate_json(path.read_text(encoding="utf-8"))
     return Trace.model_validate(item)
 
 
@@ -511,7 +712,7 @@ def _load_traces(patterns: list[str]) -> list[Trace]:
     return traces
 
 
-def _load_trace_lookup(path: Path) -> list[Trace]:
+def _load_trace_lookup_traces(path: Path) -> list[Trace]:
     raw = _load_trace_lookup_map(path)
     traces: list[Trace] = []
     for key, value in raw.items():
@@ -521,6 +722,18 @@ def _load_trace_lookup(path: Path) -> list[Trace]:
         except Exception as exc:
             raise ValueError(f"Trace lookup entry {key} -> {trace_path} is invalid: {exc}") from exc
         traces.append(trace)
+    return traces
+
+
+def _load_trace_lookup_trace_map(lookup: dict[str, str]) -> dict[str, Trace]:
+    traces: dict[str, Trace] = {}
+    for split_id, value in lookup.items():
+        trace_path = Path(value)
+        trace = Trace.model_validate_json(trace_path.read_text(encoding="utf-8"))
+        traces[split_id] = trace
+        traces[trace.run_id] = trace
+        if trace.attack_id:
+            traces[trace.attack_id] = trace
     return traces
 
 
@@ -534,6 +747,55 @@ def _load_trace_lookup_map(path: Path) -> dict[str, str]:
             raise ValueError(f"Trace lookup value for {key!r} must be a string path")
         lookup[str(key)] = value
     return lookup
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _append_duplicate_hash_issues(label: str, hashes: dict[str, list[str]], issues: list[str]) -> None:
+    for digest, ids in hashes.items():
+        unique_ids = sorted(set(ids))
+        if len(unique_ids) > 1:
+            issues.append(f"{label}: duplicate SHA {digest} across IDs: {unique_ids}")
+
+
+def _has_asr_provenance(trace: Trace) -> bool:
+    keys = (
+        "asr",
+        "asr_model",
+        "asr_provenance",
+        "asr_provider",
+        "transcript_source",
+        "transcript_provenance",
+        "transcript_path",
+        "whisper",
+    )
+    return any(key in trace.metadata for key in keys)
+
+
+def _audio_hash_is_unique(spec: AttackSpec, specs: list[AttackSpec]) -> bool:
+    path = Path(spec.audio_path)
+    if not path.exists():
+        return False
+    digest = _sha256_file(path)
+    matching_ids = [other.attack_id for other in specs if Path(other.audio_path).exists() and _sha256_file(Path(other.audio_path)) == digest]
+    return len(set(matching_ids)) == 1
+
+
+def _load_mongo_embedding_ids() -> set[str]:
+    try:
+        settings = load_settings()
+        if not settings.mongodb_uri:
+            return set()
+        db = get_database(settings)
+        return {str(item["attack_id"]) for item in db.attack_embeddings.find({}, {"attack_id": 1}) if item.get("attack_id")}
+    except Exception:
+        return set()
 
 
 def _index_traces(traces: list[Trace]) -> dict[str, Trace]:
