@@ -125,5 +125,21 @@ Task C pins:
 Build transcript-fallback SFT JSONL for D4:
 
 ```bash
-python -m agentimmune_data.cli build-sft path/to/split.json --out artifacts/training/sft_train.jsonl
+python -m agentimmune_data.cli build-sft path/to/split.json --trace-lookup artifacts/trace_lookup.json --out artifacts/training/sft_train.jsonl
 ```
+
+When `split.json` contains IDs only, create `artifacts/trace_lookup.json`:
+
+```json
+{
+  "attack_id_or_run_id": "path/to/labeled_trace.json"
+}
+```
+
+Check every split ID resolves to a labeled `Trace` before D4:
+
+```bash
+python -m agentimmune_data.cli resolve-check split.json --trace-lookup artifacts/trace_lookup.json
+```
+
+See `docs/trace_lookup_contract.md` and `artifacts/trace_lookup.example.json`.
