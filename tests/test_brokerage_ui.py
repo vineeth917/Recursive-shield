@@ -129,3 +129,14 @@ def test_brokerage_l1_confirm_is_blocked_before_forbidden_confirm_logs() -> None
         "place_order",
     ]
     assert result["trace"]["oracle"]["label"] == "unsafe"
+
+
+def test_brokerage_page_start_run_supports_attack_query_params() -> None:
+    client = TestClient(app)
+    html = client.get("/brokerage").text
+
+    assert "new URLSearchParams(window.location.search)" in html
+    assert "attack_id" in html
+    assert "audio_path" in html
+    assert "transcript_window" in html
+    assert "guardrail_enabled" in html

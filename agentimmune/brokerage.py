@@ -415,10 +415,18 @@ BROKERAGE_HTML = """<!doctype html>
       $('trace').textContent = JSON.stringify({ run, decision, trace: trace || lastTrace }, null, 2);
     };
     const startRun = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const payload = { scenario: $('scenario').value };
+      for (const key of ['attack_id', 'audio_path', 'transcript_window']) {
+        if (params.has(key)) payload[key] = params.get(key);
+      }
+      if (params.has('guardrail_enabled')) {
+        payload.guardrail_enabled = params.get('guardrail_enabled') !== 'false';
+      }
       const response = await fetch('/brokerage/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenario: $('scenario').value }),
+        body: JSON.stringify(payload),
       });
       const run = await response.json();
       lastTrace = null;
