@@ -416,7 +416,11 @@ BROKERAGE_HTML = """<!doctype html>
     const renderRun = (run, trace = lastTrace, decision = null) => {
       currentRun = run;
       $('runLabel').textContent = `${run.run_id} · ${run.scenario}`;
-      $('audio').src = `/${run.audio_path}`;
+      const audio = $('audio');
+      const nextAudioSrc = `${window.location.origin}/${run.audio_path}`;
+      if (audio.src !== nextAudioSrc) {
+        audio.src = nextAudioSrc;
+      }
       $('policyText').value = run.policy.raw_text;
       $('transcript').value = run.transcript_window;
       if (trace) lastTrace = trace;
