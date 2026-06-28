@@ -144,6 +144,29 @@ GuardrailDecision(
 
 Task A has now run Person B's actual split attack IDs through live `gemini-3.5-flash` Computer Use plus the deterministic oracle.
 
+Strict protocol audit status: **not yet final training handoff**.
+
+The tracked bundle below resolves the eight requested split IDs and contains real Gemini response/action logs for the poisoned WAVs, but it predates the newer strict baseline protocol. Do not treat it as the final C/D training package until A reruns `scripts/run_split_attack_traces.py` after Person B supplies the missing clean carrier audio.
+
+Current blocker:
+
+```text
+artifacts/carriers/fomc_clean.wav
+```
+
+Every current `AttackSpec.clean_audio_path` points to that file, and it is not present in the repo checkout. Because of that, the existing bundle has no per-attack clean baseline trace, no `clean_baseline_run_id`, and the trace `transcript` fields are payload/spec text rather than ASR obtained from `clean_audio_path` and `audio_path`.
+
+The runner now enforces the strict protocol for the next run:
+
+- validates each `AttackSpec` with `agentimmune.contracts.AttackSpec`
+- executes a clean baseline from `clean_audio_path` before each poisoned run
+- transcribes both clean and poisoned WAVs through Gemini API audio transcription
+- disables the custom Gemma guardrail with `guardrail_enabled=false`
+- keeps Gemini native Computer Use injection defense enabled
+- records Gemini response/action logs plus transcript logs
+- links each poisoned trace to `clean_baseline_run_id`
+- relabels traces with the deterministic oracle after final native-defense outcome is known
+
 Tracked evidence bundle:
 
 ```text
@@ -189,7 +212,7 @@ Each attack also has a raw Gemini response/action log with model id and response
 
 Important detail: the runner sends both Person B's actual WAV bytes and the spec payload/transcript text to Gemini. During probing, at least one attack WAV was perceived by Gemini as a beep/no-instruction audio clip, so the spec payload text is included in the prompt and stored in metadata for traceability.
 
-D's next step:
+D's provisional step with the current caught-only bundle:
 
 ```bash
 python3.11 -m zipfile -e fixtures/person_b_attack_traces/person_b_attack_traces_20260628T025027Z.zip .
@@ -197,6 +220,17 @@ python3.11 -m agentimmune_data.cli build-sft split.json \
   --trace-lookup artifacts/person_b_attack_traces/20260628T025027Z/trace_lookup.json \
   --out artifacts/training/sft_train_from_split.jsonl
 ```
+
+This only verifies C/D plumbing against real poisoned Gemini runs. It is not the final strict dataset because the clean baselines are missing.
+
+A's required rerun after Person B provides `artifacts/carriers/fomc_clean.wav`:
+
+```bash
+python3.11 -m uvicorn agentimmune.server:app --host 127.0.0.1 --port 8000
+python3.11 scripts/run_split_attack_traces.py --model gemini-3.5-flash
+```
+
+After that rerun, hand D the new `artifacts/person_b_attack_traces/<timestamp>/manifest.json`, `trace_lookup.json`, `clean_trace_lookup.json`, `traces/*.json`, `gemini_action_logs/*.json`, and `transcript_logs/*.json`. Each poisoned trace should have `clean_baseline_run_id` populated and each trace `transcript` should come from Gemini audio transcription.
 
 If D wants to include held-out/dev traces in a non-training audit, use:
 
