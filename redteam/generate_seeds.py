@@ -45,6 +45,9 @@ def main():
         print(f"Generated L1: {spec_l1.attack_id}")
         
     print("\nAll seeds generated successfully under artifacts/ directory.")
+    print("Each artifacts/scenarios/<attack_id>/ directory contains:")
+    print("  clean_transcript.txt + clean.wav")
+    print("  poisoned_transcript.txt + poisoned.wav")
 
 if __name__ == "__main__":
     main()
