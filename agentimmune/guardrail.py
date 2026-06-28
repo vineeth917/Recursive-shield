@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from agentimmune.contracts import ActionVerdict, Constraint, GuardrailDecision, ToolAction, Trace
+from agentimmune.contracts import ActionVerdict, Constraint, GuardrailDecision, GuardrailHookPayload, ToolAction, Trace
 from agentimmune.oracle import evaluate_action
 
 
@@ -52,3 +52,12 @@ async def classify(
     policy: Constraint,
 ) -> GuardrailDecision:
     return await StubGuardrail().classify(audio_path, screenshot_path, action, policy)
+
+
+async def classify_payload(payload: GuardrailHookPayload) -> GuardrailDecision:
+    return await classify(
+        payload.audio_path,
+        payload.screenshot_path,
+        payload.proposed_action,
+        payload.policy,
+    )

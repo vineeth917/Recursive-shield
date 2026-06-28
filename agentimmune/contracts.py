@@ -171,3 +171,16 @@ class GuardrailDecision(StrictModel):
     model_version_id: str = "stub-v0"
     latency_ms: float | None = Field(default=None, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardrailHookPayload(StrictModel):
+    """Request body A sends before executing a state-changing brokerage action."""
+
+    run_id: str
+    audio_path: str
+    screenshot_path: str | None = None
+    transcript_window: str = ""
+    proposed_action: ToolAction
+    policy: Constraint
+    recent_actions: list[ToolAction] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
