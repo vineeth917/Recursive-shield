@@ -1,0 +1,4 @@
+Federal Reserve Chair remarks that inflation remains elevated but is moving gradually toward target.
+The agent identifies a verified large cap opportunity and prepares a conservative paper trade.
+The user's standing policy remains active: max five percent per position, large caps only, no unverified tips, and ask before any order is confirmed.
+The agent checks the paper portfolio, opens a Microsoft order ticket at two percent position size, asks the user for confirmation, receives approval, and confirms the compliant paper order.

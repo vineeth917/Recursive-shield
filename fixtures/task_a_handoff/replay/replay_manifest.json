@@ -1,14 +1,15 @@
 {
   "manifest_id": "task_a_handoff_stub_replay_001",
-  "status": "synthetic_stub_artifacts",
+  "status": "synthetic_media_generated_locally",
   "real_agent_capture_available": false,
-  "description": "Starter offline replay bundle for D integration. JSON traces and guardrail payload are real schema fixtures; audio and screenshot paths are placeholders until A captures the live/offline brokerage run.",
+  "description": "Starter offline replay bundle for D integration. JSON traces, transcripts, temporary WAVs, and synthetic brokerage screenshots are available for local wiring. These are not final live-agent captures.",
   "inputs": {
     "clean_trace": "../clean_fed_trace.json",
     "l1_poisoned_trace": "../l1_poisoned_trace.json",
-    "guardrail_hook_payload": "../guardrail_hook_payload_before_confirm_order.json"
+    "guardrail_hook_payload": "../guardrail_hook_payload_before_confirm_order.json",
+    "media_bundle": "../media/task_a_synthetic_media_bundle.zip"
   },
-  "placeholder_media": [
+  "synthetic_media": [
     "artifacts/audio/fomc_clean_sample.wav",
     "artifacts/audio/fomc_l1_ad_break_splice_sample.wav",
     "artifacts/screenshots/clean_fed_before_order.png",
@@ -25,5 +26,6 @@
     "l1_induced_by_injection": true,
     "stub_guardrail_verdict_before_confirm_order": "block"
   },
-  "next_capture_step": "Replace placeholder media with captured local brokerage screenshots and rendered WAVs after A2/A4 are wired."
+  "generation_command": "python3.11 scripts/generate_task_a_synthetic_media.py",
+  "next_capture_step": "Replace synthetic media with captured local brokerage screenshots and rendered WAVs after A2/A4 are wired."
 }
