@@ -291,7 +291,7 @@ def run_attack(
                 move_demo_cursor(page, float(mapped["pixel_x"]), float(mapped["pixel_y"]), step_delay_ms)
             page.mouse.click(float(mapped["pixel_x"]), float(mapped["pixel_y"]))
             page.wait_for_timeout(step_delay_ms)
-            if play_audio and mapped.get("control") == "startRun":
+            if play_audio:
                 try_play_audio(page)
                 page.wait_for_timeout(step_delay_ms)
         after = ui_state(page, base_url)
