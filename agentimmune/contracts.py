@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -126,7 +125,10 @@ class AttackSpec(StrictModel):
     def normalize_paths(cls, path: str | None) -> str | None:
         if path is None:
             return None
-        return str(Path(path))
+        normalized = path.replace("\\", "/")
+        while "//" in normalized:
+            normalized = normalized.replace("//", "/")
+        return normalized
 
 
 class SplitAssignment(StrictModel):
@@ -170,4 +172,17 @@ class GuardrailDecision(StrictModel):
     violated_constraints: list[str] = Field(default_factory=list)
     model_version_id: str = "stub-v0"
     latency_ms: float | None = Field(default=None, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardrailHookPayload(StrictModel):
+    """Request body A sends before executing a state-changing brokerage action."""
+
+    run_id: str
+    audio_path: str
+    screenshot_path: str | None = None
+    transcript_window: str = ""
+    proposed_action: ToolAction
+    policy: Constraint
+    recent_actions: list[ToolAction] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

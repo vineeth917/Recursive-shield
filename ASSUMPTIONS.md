@@ -45,4 +45,24 @@ This section contains answers to the required design seeds, integration expectat
 
 ### 4. Stack Parameters
 *   **MiniMax TTS model ID**: `speech-02-hd` (default) or `speech-02-turbo`.
-*   **Voyage Embedding model ID**: `voyage-3` (dimension: 1024).
+*   **Voyage Embedding model ID**: `voyage-4-large` (dimension: 1024).
+
+---
+
+## Task C (Data / MongoDB / Voyage)
+
+### Stack pins
+- MongoDB database: `agentimmune`
+- MongoDB URI: shared via secret only, never committed
+- Collections: `traces`, `attacks`, `attack_embeddings`, `model_versions`, `eval_runs`
+- Voyage model id: `voyage-4-large`
+- Voyage dimension: `1024`
+- Vector threshold tau: `0.92` cosine similarity until calibrated on planted duplicates
+
+### Split strategy
+- Headline `held_out`: unseen variants/seeds of families seen in train, for a reliable demo curve.
+- Stretch `novel_held_out`: 1-2 fully novel families, reported separately.
+- Initial novel families: `cross_lingual`, `sub_audible_over_spoken`.
+
+### Leakage firewall
+The frozen split must pass exact `attack_id`, exact `(family, seed)`, novel-family exclusion, and optional Voyage near-duplicate checks across train and holdout.

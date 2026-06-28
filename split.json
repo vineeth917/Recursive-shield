@@ -1,0 +1,20 @@
+{
+  "benign": [
+    "run_clean_fed_sample_001"
+  ],
+  "dev": [
+    "l1_ad_break_splice_seed_230"
+  ],
+  "held_out": [
+    "l0_fake_breaking_news_urgency_seed_996",
+    "l1_spoofed_host_directive_seed_752"
+  ],
+  "novel_held_out": [],
+  "train": [
+    "l0_ad_break_splice_seed_244",
+    "l0_constraint_override_seed_795",
+    "l0_spoofed_host_directive_seed_515",
+    "l1_constraint_override_seed_638",
+    "l1_fake_breaking_news_urgency_seed_676"
+  ]
+}

@@ -56,6 +56,21 @@ python scripts/capture_demo_stub.py
 }
 ```
 
+`/classify-payload` accepts A's full `GuardrailHookPayload` shape:
+
+```json
+{
+  "run_id": "run_l1",
+  "audio_path": "artifacts/audio/poisoned.wav",
+  "screenshot_path": "artifacts/screens/order.png",
+  "transcript_window": "recent transcript text",
+  "proposed_action": {"tool": "confirm_order", "args": {}},
+  "policy": {"raw_text": "max 5%", "max_position_pct": 5},
+  "recent_actions": [],
+  "metadata": {}
+}
+```
+
 ## GPU training box
 
 On Lightning AI / Colab GPU:
@@ -66,3 +81,49 @@ pip install -r requirements/gpu-training.txt
 ```
 
 Do not install `requirements/gpu-training.txt` on local Mac unless you specifically want to debug dependency resolution.
+
+## Data Handoff Checks
+
+Voyage smoke test, using secrets from your shell only:
+
+```bash
+export VOYAGE_API_KEY="..."
+export VOYAGE_MODEL="voyage-4-large"
+export VOYAGE_DIMENSION="1024"
+python -m agentimmune_data.cli smoke-voyage
+```
+
+Fail the build if current handoff artifacts are still synthetic/missing:
+
+```bash
+python -m agentimmune_data.cli audit-no-stub --strict
+```
+
+Validate C's future `split.json`:
+
+```bash
+python -m agentimmune_data.cli validate-split path/to/split.json
+```
+
+Build C's frozen split and run the leakage firewall:
+
+```bash
+python -m agentimmune_data.cli split artifacts/specs --benign fixtures/task_a_handoff/clean_fed_trace.json --out split.json
+python -m agentimmune_data.cli leakage-check artifacts/specs --split split.json
+```
+
+Task C pins:
+
+- Mongo URI: provide with `MONGODB_URI` or `MONGO_URI` secret only
+- Database: `agentimmune`
+- Collections: `traces`, `attacks`, `attack_embeddings`, `model_versions`, `eval_runs`
+- Vector index: `attack_embedding_vector_index` on `attack_embeddings.embedding`
+- Voyage model: `voyage-4-large`
+- Embedding dimension: `1024`
+- Duplicate threshold tau: `0.92`
+
+Build transcript-fallback SFT JSONL for D4:
+
+```bash
+python -m agentimmune_data.cli build-sft path/to/split.json --out artifacts/training/sft_train.jsonl
+```
