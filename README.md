@@ -142,4 +142,22 @@ Check every split ID resolves to a labeled `Trace` before D4:
 python -m agentimmune_data.cli resolve-check split.json --trace-lookup artifacts/trace_lookup.json
 ```
 
+Run the data firewall before training:
+
+```bash
+python -m agentimmune_data.cli leakage-check artifacts/specs --split split.json
+python -m agentimmune_data.cli resolve-check split.json --trace-lookup artifacts/trace_lookup.json
+python -m agentimmune_data.cli audio-audit artifacts/specs --trace-lookup artifacts/trace_lookup.json
+python -m agentimmune_data.cli handoff-report split.json --trace-lookup artifacts/trace_lookup.json --specs artifacts/specs
+```
+
+`audio-audit` intentionally fails if placeholder/fake audio slips in: duplicate WAV hashes across attack IDs, missing clean carriers, empty ASR transcript, or payload-text transcripts without ASR provenance.
+
+Mongo proof and embeddings use secrets from the shell only:
+
+```bash
+python -m agentimmune_data.cli mongo-proof
+python -m agentimmune_data.cli embed-attacks artifacts/specs
+```
+
 See `docs/trace_lookup_contract.md` and `artifacts/trace_lookup.example.json`.
