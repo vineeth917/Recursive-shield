@@ -81,3 +81,32 @@ pip install -r requirements/gpu-training.txt
 ```
 
 Do not install `requirements/gpu-training.txt` on local Mac unless you specifically want to debug dependency resolution.
+
+## Data Handoff Checks
+
+Voyage smoke test, using secrets from your shell only:
+
+```bash
+export VOYAGE_API_KEY="..."
+export VOYAGE_MODEL="voyage-4-large"
+export VOYAGE_DIMENSION="1024"
+python -m agentimmune_data.cli smoke-voyage
+```
+
+Fail the build if current handoff artifacts are still synthetic/missing:
+
+```bash
+python -m agentimmune_data.cli audit-no-stub --strict
+```
+
+Validate C's future `split.json`:
+
+```bash
+python -m agentimmune_data.cli validate-split path/to/split.json
+```
+
+Build transcript-fallback SFT JSONL for D4:
+
+```bash
+python -m agentimmune_data.cli build-sft path/to/split.json --out artifacts/training/sft_train.jsonl
+```

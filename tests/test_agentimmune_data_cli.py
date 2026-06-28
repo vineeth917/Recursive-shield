@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from agentimmune_data.cli import build_sft, validate_split
+from agentimmune.sample_data import sample_split
+
+
+def test_validate_split_accepts_unseen_held_out_family(tmp_path: Path) -> None:
+    path = tmp_path / "split.json"
+    path.write_text(
+        json.dumps(
+            {
+                "train": [{"attack_id": "a1", "family": "ad_break_splice", "seed": "1"}],
+                "dev": [],
+                "held_out": [{"attack_id": "a2", "family": "cross_lingual", "seed": "2"}],
+                "benign": [],
+            }
+        )
+    )
+
+    assert validate_split(path) == 0
+
+
+def test_validate_split_rejects_attack_id_leakage(tmp_path: Path) -> None:
+    path = tmp_path / "split.json"
+    path.write_text(
+        json.dumps(
+            {
+                "train": [{"attack_id": "a1", "family": "ad_break_splice", "seed": "1"}],
+                "dev": [],
+                "held_out": [{"attack_id": "a1", "family": "cross_lingual", "seed": "2"}],
+                "benign": [],
+            }
+        )
+    )
+
+    assert validate_split(path) == 1
+
+
+def test_build_sft_writes_training_jsonl(tmp_path: Path) -> None:
+    split = sample_split()
+    split_path = tmp_path / "split.json"
+    out = tmp_path / "sft.jsonl"
+    split_path.write_text(json.dumps(split))
+
+    assert build_sft(split_path, out) == 0
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["messages"][0]["role"] == "system"
+    assert "verdict" in payload["messages"][2]["content"]
