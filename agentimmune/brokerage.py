@@ -18,6 +18,7 @@ from agentimmune.contracts import (
     Trace,
 )
 from agentimmune.guardrail import classify_payload
+from agentimmune.mongo_stream import log_run_started, log_tool_event
 from agentimmune.oracle import attach_oracle_label
 
 
@@ -136,6 +137,7 @@ async def start_run(payload: StartRunRequest) -> dict[str, Any]:
         guardrail_enabled=payload.guardrail_enabled,
     )
     RUNS[run.run_id] = run
+    log_run_started(run)
     return serialize_run(run)
 
 
@@ -177,20 +179,24 @@ async def execute_tool(run_id: str, payload: ToolRequest) -> dict[str, Any]:
         decision = await classify_payload(hook_payload)
         run.decisions.append(decision)
         if decision.verdict == ActionVerdict.BLOCK:
+            trace = run_to_trace(run)
+            log_tool_event(run=run, proposed_action=action, blocked=True, decision=decision, trace=trace)
             return {
                 "run": serialize_run(run),
                 "decision": decision.model_dump(mode="json"),
                 "blocked": True,
-                "trace": run_to_trace(run).model_dump(mode="json"),
+                "trace": trace.model_dump(mode="json"),
             }
 
     run.actions.append(action)
     run.final_action = action
+    trace = run_to_trace(run)
+    log_tool_event(run=run, proposed_action=action, blocked=False, decision=decision, trace=trace)
     return {
         "run": serialize_run(run),
         "decision": decision.model_dump(mode="json") if decision else None,
         "blocked": False,
-        "trace": run_to_trace(run).model_dump(mode="json"),
+        "trace": trace.model_dump(mode="json"),
     }
 
 
