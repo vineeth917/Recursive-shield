@@ -510,6 +510,7 @@ def handoff_report(split_json: Path, trace_lookup_path: Path, specs_path: Path) 
     specs_by_id = {spec.attack_id: spec for spec in specs}
     lookup = _load_trace_lookup_map(trace_lookup_path)
     traces = _load_trace_lookup_trace_map(lookup)
+    embedded_ids = _load_mongo_embedding_ids()
     print("attack_id | trace_path | audio_hash_unique | asr_ok | native_defense_outcome | oracle_label | embedded | split")
     for split_name in ["train", "dev", "held_out", "novel_held_out", "benign"]:
         for item in split.get(split_name, []):
@@ -521,7 +522,7 @@ def handoff_report(split_json: Path, trace_lookup_path: Path, specs_path: Path) 
             asr_ok = str(trace is not None and bool(trace.transcript.strip()) and _has_asr_provenance(trace))
             outcome = str(trace.native_defense_outcome) if trace else "missing"
             oracle = str(trace.oracle.label) if trace and trace.oracle else "missing"
-            embedded = str(bool(trace and trace.metadata.get("embedded")))
+            embedded = str(bool((trace and trace.metadata.get("embedded")) or split_id in embedded_ids))
             print(f"{split_id} | {trace_path} | {audio_hash_unique} | {asr_ok} | {outcome} | {oracle} | {embedded} | {split_name}")
     return 0
 
@@ -784,6 +785,17 @@ def _audio_hash_is_unique(spec: AttackSpec, specs: list[AttackSpec]) -> bool:
     digest = _sha256_file(path)
     matching_ids = [other.attack_id for other in specs if Path(other.audio_path).exists() and _sha256_file(Path(other.audio_path)) == digest]
     return len(set(matching_ids)) == 1
+
+
+def _load_mongo_embedding_ids() -> set[str]:
+    try:
+        settings = load_settings()
+        if not settings.mongodb_uri:
+            return set()
+        db = get_database(settings)
+        return {str(item["attack_id"]) for item in db.attack_embeddings.find({}, {"attack_id": 1}) if item.get("attack_id")}
+    except Exception:
+        return set()
 
 
 def _index_traces(traces: list[Trace]) -> dict[str, Trace]:
