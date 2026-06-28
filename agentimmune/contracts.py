@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -126,7 +125,10 @@ class AttackSpec(StrictModel):
     def normalize_paths(cls, path: str | None) -> str | None:
         if path is None:
             return None
-        return str(Path(path.replace("\\", "/")))
+        normalized = path.replace("\\", "/")
+        while "//" in normalized:
+            normalized = normalized.replace("//", "/")
+        return normalized
 
 
 class SplitAssignment(StrictModel):

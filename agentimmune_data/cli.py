@@ -10,6 +10,11 @@ from typing import Any
 
 from agentimmune.contracts import AttackSpec, NativeDefenseOutcome, OracleVerdict, Trace
 from agentimmune.oracle import attach_oracle_label
+from pydantic import ValidationError
+
+from .config import load_settings
+from .db import ensure_collections, ensure_vector_index, get_database, upsert_attacks
+from .split import SplitConfig, assert_no_leakage, build_split, split_summary, write_split_json
 
 
 def main() -> int:
@@ -31,6 +36,19 @@ def main() -> int:
     build.add_argument("split_json")
     build.add_argument("--out", default="artifacts/training/sft_train.jsonl")
 
+    init_db_cmd = sub.add_parser("init-db", help="Create Task C MongoDB collections and indexes.")
+
+    vector_index = sub.add_parser("init-vector-index", help="Create the Atlas Vector Search index.")
+
+    split_cmd = sub.add_parser("split", help="Build frozen train/dev/held_out/benign split.json.")
+    split_cmd.add_argument("path")
+    split_cmd.add_argument("--benign")
+    split_cmd.add_argument("--out", default="split.json")
+
+    leakage = sub.add_parser("leakage-check", help="Run Task C leakage firewall against split.json.")
+    leakage.add_argument("path")
+    leakage.add_argument("--split", default="split.json")
+
     args = parser.parse_args()
     if args.command == "smoke-voyage":
         return smoke_voyage(args.text)
@@ -40,6 +58,14 @@ def main() -> int:
         return validate_split(Path(args.path))
     if args.command == "build-sft":
         return build_sft(Path(args.split_json), Path(args.out))
+    if args.command == "init-db":
+        return init_db()
+    if args.command == "init-vector-index":
+        return init_vector_index()
+    if args.command == "split":
+        return split_attacks(Path(args.path), Path(args.out), Path(args.benign) if args.benign else None)
+    if args.command == "leakage-check":
+        return leakage_check(Path(args.path), Path(args.split))
     raise AssertionError(args.command)
 
 
@@ -175,6 +201,54 @@ def build_sft(split_json: Path, out: Path) -> int:
     return 0
 
 
+def init_db() -> int:
+    settings = load_settings()
+    db = get_database(settings)
+    ensure_collections(db)
+    print(f"initialized MongoDB database {settings.mongodb_db}")
+    return 0
+
+
+def init_vector_index() -> int:
+    settings = load_settings()
+    db = get_database(settings)
+    ensure_vector_index(db, dimension=settings.voyage_dimension)
+    print(f"requested vector index attack_embedding_vector_index dimension={settings.voyage_dimension}")
+    return 0
+
+
+def split_attacks(path: Path, out: Path, benign_path: Path | None) -> int:
+    settings = load_settings()
+    specs, errors = _load_attack_specs(path)
+    if errors:
+        for error in errors:
+            print(f"rejected {error}")
+        return 1
+    config = SplitConfig(
+        seed=settings.split_seed,
+        novel_families=settings.novel_families,
+        held_out_variant_ratio=settings.held_out_variant_ratio,
+    )
+    split = build_split(specs, config)
+    split["benign"] = _load_benign_ids(benign_path)
+    assert_no_leakage(specs, split, duplicate_threshold=settings.duplicate_threshold)
+    write_split_json(split, out)
+    print(json.dumps(split_summary(split), sort_keys=True))
+    return 0
+
+
+def leakage_check(specs_path: Path, split_path: Path) -> int:
+    specs, errors = _load_attack_specs(specs_path)
+    if errors:
+        for error in errors:
+            print(f"rejected {error}")
+        return 1
+    split = json.loads(split_path.read_text(encoding="utf-8"))
+    assert_no_leakage(specs, split, duplicate_threshold=load_settings().duplicate_threshold)
+    print("leakage_firewall=pass")
+    return 0
+
+
 def trace_to_sft_example(trace: Trace) -> dict[str, Any]:
     action = trace.final_action or (trace.actions[-1] if trace.actions else None)
     oracle = trace.oracle
@@ -221,6 +295,34 @@ def _expand(patterns: list[str]) -> list[Path]:
     for pattern in patterns:
         paths.extend(Path(p) for p in glob.glob(pattern))
     return sorted(set(paths))
+
+
+def _load_attack_specs(path: Path) -> tuple[list[AttackSpec], list[str]]:
+    spec_paths = sorted(path.glob("*.json")) if path.is_dir() else [path]
+    specs: list[AttackSpec] = []
+    errors: list[str] = []
+    for spec_path in spec_paths:
+        try:
+            raw = json.loads(spec_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                specs.extend(AttackSpec.model_validate(item) for item in raw)
+            else:
+                specs.append(AttackSpec.model_validate(raw))
+        except (ValidationError, ValueError, OSError) as exc:
+            errors.append(f"{spec_path}: {exc}")
+    return specs, errors
+
+
+def _load_benign_ids(path: Path | None) -> list[str]:
+    if path is None:
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    items = raw if isinstance(raw, list) else [raw]
+    ids: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            ids.append(str(item.get("run_id") or item.get("trace_id") or item.get("id")))
+    return [item for item in ids if item and item != "None"]
 
 
 def _trace_from_item(item: Any) -> Trace:
