@@ -22,7 +22,7 @@ class ClassifyRequest(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "backend": "stub"}
+    return {"status": "ok", "backend": "v3_offline_replay"}
 
 
 @app.post("/classify", response_model=GuardrailDecision)

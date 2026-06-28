@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from agentimmune.contracts import (
+    ActionVerdict,
     Constraint,
     GuardrailDecision,
     GuardrailHookPayload,
@@ -55,6 +56,7 @@ class ToolRequest(BaseModel):
 
 
 RUNS: dict[str, BrokerageRun] = {}
+GUARDRAIL_TOOLS = {"set_field", "place_order", "confirm_order"}
 
 
 def default_policy() -> Constraint:
@@ -158,7 +160,7 @@ async def execute_tool(run_id: str, payload: ToolRequest) -> dict[str, Any]:
     )
 
     decision: GuardrailDecision | None = None
-    if payload.tool == "confirm_order" and run.guardrail_enabled:
+    if payload.tool in GUARDRAIL_TOOLS and run.guardrail_enabled:
         hook_payload = GuardrailHookPayload(
             run_id=run.run_id,
             audio_path=run.audio_path,
@@ -168,13 +170,13 @@ async def execute_tool(run_id: str, payload: ToolRequest) -> dict[str, Any]:
             policy=run.policy,
             recent_actions=run.actions[-5:],
             metadata={
-                "hook": "before_confirm_order",
+                "hook": f"before_{payload.tool}",
                 "scenario": run.scenario,
             },
         )
         decision = await classify_payload(hook_payload)
         run.decisions.append(decision)
-        if decision.verdict == "block":
+        if decision.verdict == ActionVerdict.BLOCK:
             return {
                 "run": serialize_run(run),
                 "decision": decision.model_dump(mode="json"),

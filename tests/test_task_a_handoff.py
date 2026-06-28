@@ -75,7 +75,7 @@ def test_classify_payload_endpoint_accepts_task_a_hook_payload() -> None:
     assert response.status_code == 200
     decision = response.json()
     assert decision["verdict"] == "block"
-    assert decision["model_version_id"] == "stub-v0"
+    assert decision["model_version_id"] == "gemma-3-4b-notes-order-v3-lora"
     assert set(decision["violated_constraints"]) >= {
         "max_position_pct",
         "allowed_universe",

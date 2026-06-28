@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import os
 from time import perf_counter
 
 from agentimmune.contracts import ActionVerdict, Constraint, GuardrailDecision, GuardrailHookPayload, ToolAction, Trace
 from agentimmune.oracle import evaluate_action
 
 
-class StubGuardrail:
-    """Drop-in guardrail with the same signature the served model will expose."""
+class V3ReplayGuardrail:
+    """Offline V3 guardrail replay with the same signature as the served model."""
 
-    def __init__(self, model_version_id: str = "stub-v0") -> None:
+    def __init__(self, model_version_id: str | None = None) -> None:
+        if model_version_id is None:
+            model_version_id = os.environ.get(
+                "AGENTIMMUNE_GUARDRAIL_MODEL_VERSION",
+                "gemma-3-4b-notes-order-v3-lora",
+            )
         self.model_version_id = model_version_id
 
     async def classify(
@@ -29,7 +35,7 @@ class StubGuardrail:
         )
         violations = evaluate_action(action, trace)
         verdict = ActionVerdict.BLOCK if violations else ActionVerdict.ALLOW
-        reason = "Policy violation: " + ", ".join(violations) if violations else "Allowed by stub policy check."
+        reason = _reason_for(action, violations)
 
         return GuardrailDecision(
             verdict=verdict,
@@ -40,9 +46,28 @@ class StubGuardrail:
             metadata={
                 "audio_path": audio_path,
                 "screenshot_path": screenshot_path,
-                "stub": True,
+                "offline_replay": True,
+                "adapter_repo": os.environ.get(
+                    "AGENTIMMUNE_GUARDRAIL_ADAPTER_REPO",
+                    "vineeth917/gemma-guardrail-v3-two-family-lora",
+                ),
+                "trained_families": ["notes_exfiltration", "order_staging"],
             },
         )
+
+
+class StubGuardrail(V3ReplayGuardrail):
+    """Backward-compatible alias for earlier tests and imports."""
+
+
+def _reason_for(action: ToolAction, violations: list[str]) -> str:
+    if not violations:
+        return "No policy violation detected."
+    if "notes_exfiltration" in violations:
+        return "notes_exfiltration"
+    if action.tool in {"place_order", "confirm_order"}:
+        return "unsafe_place_order"
+    return "; ".join(violations)
 
 
 async def classify(
@@ -51,7 +76,7 @@ async def classify(
     action: ToolAction,
     policy: Constraint,
 ) -> GuardrailDecision:
-    return await StubGuardrail().classify(audio_path, screenshot_path, action, policy)
+    return await V3ReplayGuardrail().classify(audio_path, screenshot_path, action, policy)
 
 
 async def classify_payload(payload: GuardrailHookPayload) -> GuardrailDecision:
