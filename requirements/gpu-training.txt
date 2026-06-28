@@ -1,0 +1,7 @@
+# Install this on Lightning AI / Colab GPU only, not on local Mac.
+# Let Unsloth resolve and pin torch/transformers/trl/peft.
+unsloth
+vllm
+google-genai>=2.3.0
+datasets
+accelerate
