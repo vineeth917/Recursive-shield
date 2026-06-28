@@ -65,6 +65,10 @@ def main() -> int:
     leakage.add_argument("path")
     leakage.add_argument("--split", default="split.json")
 
+    resolve = sub.add_parser("resolve-check", help="Fail if split IDs do not resolve to labeled Trace JSONs.")
+    resolve.add_argument("split_json")
+    resolve.add_argument("--trace-lookup", required=True)
+
     args = parser.parse_args()
     if args.command == "smoke-voyage":
         return smoke_voyage(args.text)
@@ -97,6 +101,8 @@ def main() -> int:
         return split_attacks(Path(args.path), Path(args.out), Path(args.benign) if args.benign else None)
     if args.command == "leakage-check":
         return leakage_check(Path(args.path), Path(args.split))
+    if args.command == "resolve-check":
+        return resolve_check(Path(args.split_json), Path(args.trace_lookup))
     raise AssertionError(args.command)
 
 
@@ -321,6 +327,47 @@ def leakage_check(specs_path: Path, split_path: Path) -> int:
     return 0
 
 
+def resolve_check(split_json: Path, trace_lookup: Path) -> int:
+    split = json.loads(split_json.read_text(encoding="utf-8"))
+    lookup = _load_trace_lookup_map(trace_lookup)
+    issues: list[str] = []
+    rows: list[dict[str, str]] = []
+
+    for split_name in ["train", "dev", "held_out", "novel_held_out", "benign"]:
+        for item in split.get(split_name, []):
+            split_id = _split_item_id(item)
+            if split_id is None:
+                issues.append(f"{split_name}: cannot derive split id from item: {item!r}")
+                continue
+            trace_path_raw = lookup.get(split_id)
+            if not trace_path_raw:
+                issues.append(f"{split_name}:{split_id}: missing trace_lookup entry")
+                continue
+            trace_path = Path(trace_path_raw)
+            if not trace_path.exists():
+                issues.append(f"{split_name}:{split_id}: trace file does not exist: {trace_path}")
+                continue
+            try:
+                trace = Trace.model_validate_json(trace_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                issues.append(f"{split_name}:{split_id}: invalid Trace JSON at {trace_path}: {exc}")
+                continue
+            _validate_resolved_trace(split_name, split_id, trace, trace_path, issues)
+            rows.append(_trace_report_row(split_name, split_id, trace, trace_path))
+
+    if issues:
+        print("RESOLVE CHECK: FAIL")
+        for issue in issues:
+            print(f"- {issue}")
+        if rows:
+            _print_trace_report(rows)
+        return 1
+
+    print("RESOLVE CHECK: PASS")
+    _print_trace_report(rows)
+    return 0
+
+
 def trace_to_sft_example(trace: Trace) -> dict[str, Any]:
     action = trace.final_action or (trace.actions[-1] if trace.actions else None)
     oracle = trace.oracle
@@ -465,18 +512,28 @@ def _load_traces(patterns: list[str]) -> list[Trace]:
 
 
 def _load_trace_lookup(path: Path) -> list[Trace]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"Trace lookup must be a JSON object: {path}")
+    raw = _load_trace_lookup_map(path)
     traces: list[Trace] = []
     for key, value in raw.items():
-        trace_path = Path(str(value))
+        trace_path = Path(value)
         try:
             trace = Trace.model_validate_json(trace_path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise ValueError(f"Trace lookup entry {key} -> {trace_path} is invalid: {exc}") from exc
         traces.append(trace)
     return traces
+
+
+def _load_trace_lookup_map(path: Path) -> dict[str, str]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"Trace lookup must be a JSON object: {path}")
+    lookup: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            raise ValueError(f"Trace lookup value for {key!r} must be a string path")
+        lookup[str(key)] = value
+    return lookup
 
 
 def _index_traces(traces: list[Trace]) -> dict[str, Trace]:
@@ -504,6 +561,69 @@ def _resolve_split_traces(items: list[Any], trace_index: dict[str, Trace]) -> tu
         else:
             traces.append(trace)
     return traces, missing
+
+
+def _split_item_id(item: Any) -> str | None:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in ("attack_id", "run_id", "trace_id", "id"):
+            value = item.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+def _validate_resolved_trace(
+    split_name: str,
+    split_id: str,
+    trace: Trace,
+    trace_path: Path,
+    issues: list[str],
+) -> None:
+    if trace.attack_id != split_id and trace.run_id != split_id:
+        issues.append(
+            f"{split_name}:{split_id}: Trace {trace_path} has run_id={trace.run_id!r} attack_id={trace.attack_id!r}"
+        )
+    if split_name != "benign" and not trace.attack_id:
+        issues.append(f"{split_name}:{split_id}: attack trace is missing attack_id")
+    if trace.oracle is None:
+        issues.append(f"{split_name}:{split_id}: missing oracle label")
+    if trace.native_defense_outcome == NativeDefenseOutcome.UNKNOWN:
+        issues.append(f"{split_name}:{split_id}: native_defense_outcome is unknown")
+    if not any(key in trace.metadata for key in ("gemini_evidence", "gemini_response", "gemini_action_log_path")):
+        issues.append(f"{split_name}:{split_id}: missing Gemini evidence metadata")
+
+
+def _trace_report_row(split_name: str, split_id: str, trace: Trace, trace_path: Path) -> dict[str, str]:
+    oracle_label = trace.oracle.label if trace.oracle else "missing"
+    return {
+        "attack_id": trace.attack_id or trace.run_id or split_id,
+        "trace_path": str(trace_path),
+        "native_defense_outcome": str(trace.native_defense_outcome),
+        "actions": str(len(trace.actions)),
+        "oracle_label": str(oracle_label),
+        "embedded": str(bool(trace.metadata.get("embedded"))),
+        "in_split": split_name,
+    }
+
+
+def _print_trace_report(rows: list[dict[str, str]]) -> None:
+    print("attack_id | trace_path | native_defense_outcome | actions | oracle_label | embedded | in_split")
+    for row in rows:
+        print(
+            " | ".join(
+                [
+                    row["attack_id"],
+                    row["trace_path"],
+                    row["native_defense_outcome"],
+                    row["actions"],
+                    row["oracle_label"],
+                    row["embedded"],
+                    row["in_split"],
+                ]
+            )
+        )
 
 
 if __name__ == "__main__":

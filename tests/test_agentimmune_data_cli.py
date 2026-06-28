@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agentimmune.contracts import NativeDefenseOutcome, OracleLabel, OracleVerdict, Trace
-from agentimmune_data.cli import build_sft, build_sft_traces, validate_split
+from agentimmune_data.cli import build_sft, build_sft_traces, resolve_check, validate_split
 from agentimmune.sample_data import sample_split
 
 
@@ -110,6 +110,31 @@ def test_build_sft_resolves_trace_lookup(tmp_path: Path) -> None:
 
     assert build_sft(split_path, out, [], lookup_path, allow_missing=False) == 0
     assert len(out.read_text().splitlines()) == 1
+
+
+def test_resolve_check_passes_trace_lookup(tmp_path: Path) -> None:
+    split = sample_split()
+    trace_path = tmp_path / "labeled_trace.json"
+    lookup_path = tmp_path / "trace_lookup.json"
+    split_path = tmp_path / "split.json"
+
+    trace = split["train"][0]
+    trace["metadata"]["gemini_evidence"] = {"response_id": "test"}
+    trace["native_defense_outcome"] = "bypassed"
+    trace_path.write_text(json.dumps(trace))
+    lookup_path.write_text(json.dumps({"atk_train_1": str(trace_path)}))
+    split_path.write_text(json.dumps({"train": ["atk_train_1"], "dev": [], "held_out": [], "benign": []}))
+
+    assert resolve_check(split_path, lookup_path) == 0
+
+
+def test_resolve_check_fails_missing_lookup_entry(tmp_path: Path) -> None:
+    lookup_path = tmp_path / "trace_lookup.json"
+    split_path = tmp_path / "split.json"
+    lookup_path.write_text(json.dumps({}))
+    split_path.write_text(json.dumps({"train": ["missing"], "dev": [], "held_out": [], "benign": []}))
+
+    assert resolve_check(split_path, lookup_path) == 1
 
 
 def test_build_sft_accepts_caught_trace_without_final_action(tmp_path: Path) -> None:
