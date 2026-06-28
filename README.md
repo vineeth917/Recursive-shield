@@ -105,6 +105,23 @@ Validate C's future `split.json`:
 python -m agentimmune_data.cli validate-split path/to/split.json
 ```
 
+Build C's frozen split and run the leakage firewall:
+
+```bash
+python -m agentimmune_data.cli split artifacts/specs --benign fixtures/task_a_handoff/clean_fed_trace.json --out split.json
+python -m agentimmune_data.cli leakage-check artifacts/specs --split split.json
+```
+
+Task C pins:
+
+- Mongo URI: provide with `MONGODB_URI` or `MONGO_URI` secret only
+- Database: `agentimmune`
+- Collections: `traces`, `attacks`, `attack_embeddings`, `model_versions`, `eval_runs`
+- Vector index: `attack_embedding_vector_index` on `attack_embeddings.embedding`
+- Voyage model: `voyage-4-large`
+- Embedding dimension: `1024`
+- Duplicate threshold tau: `0.92`
+
 Build transcript-fallback SFT JSONL for D4:
 
 ```bash
