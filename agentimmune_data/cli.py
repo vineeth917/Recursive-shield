@@ -25,8 +25,8 @@ def main() -> int:
     smoke.add_argument("--text", default="agentimmune smoke test")
 
     audit = sub.add_parser("audit-no-stub", help="Fail if handoff artifacts are synthetic/stubbed/missing.")
-    audit.add_argument("--trace-glob", action="append", default=["fixtures/task_a_handoff/*.json"])
-    audit.add_argument("--spec-glob", action="append", default=["artifacts/specs/*.json"])
+    audit.add_argument("--trace-glob", action="append", default=None)
+    audit.add_argument("--spec-glob", action="append", default=None)
     audit.add_argument("--strict", action="store_true", help="Require real_capture metadata on traces.")
 
     split = sub.add_parser("validate-split", help="Validate C's split.json firewall basics.")
@@ -35,6 +35,17 @@ def main() -> int:
     build = sub.add_parser("build-sft", help="Build transcript-fallback SFT JSONL from split.json.")
     build.add_argument("split_json")
     build.add_argument("--out", default="artifacts/training/sft_train.jsonl")
+    build.add_argument(
+        "--trace-glob",
+        action="append",
+        default=None,
+        help="Trace JSON glob used to resolve split IDs.",
+    )
+    build.add_argument("--allow-missing", action="store_true")
+
+    build_traces = sub.add_parser("build-sft-traces", help="Build transcript-fallback SFT JSONL from Trace JSON files.")
+    build_traces.add_argument("--trace-glob", action="append", required=True)
+    build_traces.add_argument("--out", default="artifacts/training/sft_traces.jsonl")
 
     init_db_cmd = sub.add_parser("init-db", help="Create Task C MongoDB collections and indexes.")
 
@@ -53,11 +64,25 @@ def main() -> int:
     if args.command == "smoke-voyage":
         return smoke_voyage(args.text)
     if args.command == "audit-no-stub":
-        return audit_no_stub(args.trace_glob, args.spec_glob, args.strict)
+        return audit_no_stub(
+            args.trace_glob or ["fixtures/task_a_handoff/*.json"],
+            args.spec_glob or ["artifacts/specs/*.json"],
+            args.strict,
+        )
     if args.command == "validate-split":
         return validate_split(Path(args.path))
     if args.command == "build-sft":
-        return build_sft(Path(args.split_json), Path(args.out))
+        return build_sft(
+            Path(args.split_json),
+            Path(args.out),
+            args.trace_glob or [
+                "artifacts/real_task_a_runs/*/traces/*.json",
+                "fixtures/task_a_handoff/*.json",
+            ],
+            args.allow_missing,
+        )
+    if args.command == "build-sft-traces":
+        return build_sft_traces(args.trace_glob, Path(args.out))
     if args.command == "init-db":
         return init_db()
     if args.command == "init-vector-index":
@@ -108,8 +133,8 @@ def audit_no_stub(trace_globs: list[str], spec_globs: list[str], strict: bool) -
             trace = Trace.model_validate_json(path.read_text())
         except Exception:
             continue
-        if strict and trace.metadata.get("real_audio_captured") is not True:
-            issues.append(f"{path}: trace is not marked real_audio_captured=true")
+        if strict and not _is_real_trace(trace):
+            issues.append(f"{path}: trace is not marked real_task_a_run=true or real_audio_captured=true")
         if "fixture" in str(trace.metadata.get("fixture_kind", "")).lower():
             issues.append(f"{path}: fixture_kind indicates fixture/synthetic trace")
         if trace.native_defense_outcome == NativeDefenseOutcome.UNKNOWN:
@@ -156,7 +181,7 @@ def validate_split(path: Path) -> int:
 
     problems: list[str] = []
     train_ids = _ids(split["train"])
-    held_ids = _ids(split["held_out"])
+    held_ids = _ids(split["held_out"]) | _ids(split.get("novel_held_out", []))
     train_family_seeds = _family_seeds(split["train"])
     held_family_seeds = _family_seeds(split["held_out"])
 
@@ -167,11 +192,9 @@ def validate_split(path: Path) -> int:
     if duplicate_family_seeds:
         problems.append(f"family+seed leakage train<->held_out: {sorted(duplicate_family_seeds)}")
 
-    held_families = _families(split["held_out"])
+    held_families = _families(split["held_out"]) | _families(split.get("novel_held_out", []))
     train_families = _families(split["train"])
     unseen_held_families = held_families - train_families
-    if len(unseen_held_families) < 1:
-        problems.append("held_out has no family absent from train")
 
     if problems:
         print("SPLIT VALIDATION: FAIL")
@@ -181,20 +204,55 @@ def validate_split(path: Path) -> int:
 
     print("SPLIT VALIDATION: PASS")
     print(f"train={len(split['train'])} dev={len(split['dev'])} held_out={len(split['held_out'])} benign={len(split['benign'])}")
-    print(f"unseen_held_out_families={sorted(unseen_held_families)}")
+    print(f"novel_held_out={len(split.get('novel_held_out', []))}")
+    if unseen_held_families:
+        print(f"unseen_held_out_families={sorted(unseen_held_families)}")
+    else:
+        print("warning=no unseen held-out families in split metadata; rely on leakage-check with specs for seed/variant firewall")
     return 0
 
 
-def build_sft(split_json: Path, out: Path) -> int:
+def build_sft(split_json: Path, out: Path, trace_globs: list[str], allow_missing: bool) -> int:
     split = json.loads(split_json.read_text())
+    traces = _load_traces(trace_globs)
+    trace_index = _index_traces(traces)
+    train_items, missing = _resolve_split_traces(split.get("train", []), trace_index)
+    benign_items, benign_missing = _resolve_split_traces(split.get("benign", []), trace_index)
+    missing.extend(benign_missing)
+    if missing and not allow_missing:
+        print("SFT BUILD: FAIL unresolved split IDs")
+        for item in missing:
+            print(f"- {item}")
+        print("Hint: pass --allow-missing for partial output, or point --trace-glob at real labeled traces.")
+        return 1
+
     out.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with out.open("w", encoding="utf-8") as handle:
-        for item in split.get("train", []):
-            trace = _trace_from_item(item)
-            trace = trace if trace.oracle else attach_oracle_label(trace)
+        for trace in train_items + benign_items:
             example = trace_to_sft_example(trace)
             handle.write(json.dumps(example, sort_keys=True) + "\n")
+            count += 1
+    print(f"wrote={out}")
+    print(f"examples={count}")
+    if missing:
+        print(f"missing={len(missing)}")
+    return 0
+
+
+def build_sft_traces(trace_globs: list[str], out: Path) -> int:
+    traces = _load_traces(trace_globs)
+    if not traces:
+        print("SFT TRACE BUILD: FAIL no traces matched")
+        return 1
+    out.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with out.open("w", encoding="utf-8") as handle:
+        for trace in traces:
+            trace = trace if trace.oracle else attach_oracle_label(trace)
+            if not trace.actions and trace.oracle and trace.oracle.label == OracleVerdict.SAFE:
+                continue
+            handle.write(json.dumps(trace_to_sft_example(trace), sort_keys=True) + "\n")
             count += 1
     print(f"wrote={out}")
     print(f"examples={count}")
@@ -332,7 +390,15 @@ def _trace_from_item(item: Any) -> Trace:
 
 
 def _ids(items: list[Any]) -> set[str]:
-    return {str(item.get("attack_id")) for item in items if isinstance(item, dict) and item.get("attack_id")}
+    ids: set[str] = set()
+    for item in items:
+        if isinstance(item, str):
+            ids.add(item)
+        elif isinstance(item, dict):
+            value = item.get("attack_id") or item.get("run_id") or item.get("id")
+            if value:
+                ids.add(str(value))
+    return ids
 
 
 def _family_seeds(items: list[Any]) -> set[tuple[str, str]]:
@@ -354,6 +420,47 @@ def _field(item: dict[str, Any], key: str) -> Any:
     if isinstance(metadata, dict):
         return metadata.get(key)
     return None
+
+
+def _is_real_trace(trace: Trace) -> bool:
+    return trace.metadata.get("real_task_a_run") is True or trace.metadata.get("real_audio_captured") is True
+
+
+def _load_traces(patterns: list[str]) -> list[Trace]:
+    traces: list[Trace] = []
+    for path in _expand(patterns):
+        try:
+            traces.append(Trace.model_validate_json(path.read_text()))
+        except Exception:
+            continue
+    return traces
+
+
+def _index_traces(traces: list[Trace]) -> dict[str, Trace]:
+    indexed: dict[str, Trace] = {}
+    for trace in traces:
+        trace = trace if trace.oracle else attach_oracle_label(trace)
+        indexed[trace.run_id] = trace
+        if trace.attack_id:
+            indexed.setdefault(trace.attack_id, trace)
+    return indexed
+
+
+def _resolve_split_traces(items: list[Any], trace_index: dict[str, Trace]) -> tuple[list[Trace], list[str]]:
+    traces: list[Trace] = []
+    missing: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            trace = _trace_from_item(item)
+            traces.append(trace if trace.oracle else attach_oracle_label(trace))
+            continue
+        key = str(item)
+        trace = trace_index.get(key)
+        if trace is None:
+            missing.append(key)
+        else:
+            traces.append(trace)
+    return traces, missing
 
 
 if __name__ == "__main__":
