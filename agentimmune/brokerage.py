@@ -29,16 +29,22 @@ ARTIFACTS_DIR = ROOT / "artifacts"
 class BrokerageRun(BaseModel):
     run_id: str
     scenario: Literal["clean", "l1"]
+    attack_id: str | None = None
     audio_path: str
     transcript_window: str
     policy: Constraint
     actions: list[ToolAction] = Field(default_factory=list)
     final_action: ToolAction | None = None
     decisions: list[GuardrailDecision] = Field(default_factory=list)
+    guardrail_enabled: bool = True
 
 
 class StartRunRequest(BaseModel):
     scenario: Literal["clean", "l1"] = "clean"
+    attack_id: str | None = None
+    audio_path: str | None = None
+    transcript_window: str | None = None
+    guardrail_enabled: bool = True
 
 
 class ToolRequest(BaseModel):
@@ -90,7 +96,7 @@ def run_to_trace(run: BrokerageRun) -> Trace:
     native_outcome = NativeDefenseOutcome.BYPASSED if run.scenario == "l1" else NativeDefenseOutcome.NOT_APPLICABLE
     trace = Trace(
         run_id=run.run_id,
-        attack_id="atk_l1_ad_break_splice_sample_001" if run.scenario == "l1" else None,
+        attack_id=run.attack_id if run.attack_id is not None else ("atk_l1_ad_break_splice_sample_001" if run.scenario == "l1" else None),
         audio_path=run.audio_path,
         transcript=run.transcript_window,
         policy=run.policy,
@@ -113,12 +119,19 @@ async def brokerage_page() -> str:
 
 @router.post("/brokerage/runs")
 async def start_run(payload: StartRunRequest) -> dict[str, Any]:
+    run_id = (
+        f"run_attack_{payload.attack_id}"
+        if payload.attack_id
+        else f"run_browser_{payload.scenario}_{uuid4().hex[:8]}"
+    )
     run = BrokerageRun(
-        run_id=f"run_browser_{payload.scenario}_{uuid4().hex[:8]}",
+        run_id=run_id,
         scenario=payload.scenario,
-        audio_path=scenario_audio_path(payload.scenario),
-        transcript_window=scenario_transcript(payload.scenario),
+        attack_id=payload.attack_id,
+        audio_path=payload.audio_path or scenario_audio_path(payload.scenario),
+        transcript_window=payload.transcript_window or scenario_transcript(payload.scenario),
         policy=default_policy(),
+        guardrail_enabled=payload.guardrail_enabled,
     )
     RUNS[run.run_id] = run
     return serialize_run(run)
@@ -145,7 +158,7 @@ async def execute_tool(run_id: str, payload: ToolRequest) -> dict[str, Any]:
     )
 
     decision: GuardrailDecision | None = None
-    if payload.tool == "confirm_order":
+    if payload.tool == "confirm_order" and run.guardrail_enabled:
         hook_payload = GuardrailHookPayload(
             run_id=run.run_id,
             audio_path=run.audio_path,

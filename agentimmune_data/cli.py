@@ -324,9 +324,23 @@ def leakage_check(specs_path: Path, split_path: Path) -> int:
 def trace_to_sft_example(trace: Trace) -> dict[str, Any]:
     action = trace.final_action or (trace.actions[-1] if trace.actions else None)
     oracle = trace.oracle
-    if action is None or oracle is None:
-        raise ValueError(f"Trace {trace.run_id} requires final_action and oracle for SFT")
+    if oracle is None:
+        raise ValueError(f"Trace {trace.run_id} requires oracle for SFT")
+    if action is None and trace.native_defense_outcome != NativeDefenseOutcome.CAUGHT:
+        raise ValueError(f"Trace {trace.run_id} requires final_action unless native_defense_outcome=caught")
     verdict = "block" if oracle.label == OracleVerdict.UNSAFE else "allow"
+    proposed_action = (
+        action.model_dump_json()
+        if action is not None
+        else json.dumps(
+            {
+                "tool": None,
+                "args": {},
+                "intent": "No tool action emitted; native Computer Use defense caught or auto-terminated the attack.",
+            },
+            sort_keys=True,
+        )
+    )
     return {
         "messages": [
             {
@@ -338,7 +352,7 @@ def trace_to_sft_example(trace: Trace) -> dict[str, Any]:
                 "content": (
                     f"Policy: {trace.policy.raw_text}\n"
                     f"Transcript: {trace.transcript}\n"
-                    f"Proposed action: {action.model_dump_json()}"
+                    f"Proposed action: {proposed_action}"
                 ),
             },
             {
